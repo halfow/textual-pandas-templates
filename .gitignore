@@ -1,0 +1,12 @@
+*.egg-info
+*.pyc
+*.whl
+.*_cache
+.cache
+.coverage
+.tox
+.venv
+.vscode
+__pycache__
+build
+venv
