@@ -33,6 +33,8 @@ class SortableDataTable(DataTable):
 
 
 class PandasContainer(Container):
+    masks: dict[int, "Series[bool]"]
+
     class Mask(Message):
         def __init__(self, identity: int, mask: Callable[[DataFrame], Union["Series[bool]", None]]) -> None:
             super().__init__()
@@ -48,22 +50,25 @@ class PandasContainer(Container):
 
     async def update(self, df: DataFrame, index="Index", height=1):
         self.df, self.index, self.height = df, index, height
-        self.masks: dict[int, "Series[bool]"] = {}  # noqa: UP037
-        await self.query_one(SortableDataTable).update(df, index, height)
+
+        children = self.get_child_by_type(HorizontalScroll).children
+        masks = {id(c): c.mask(self.df) for c in children if hasattr(c, "mask")}  # type: ignore
+        self.masks = {k: v for k, v in masks.items() if v is not None}
+
+        await self._update()
 
     @on(Mask)
     async def _filter(self, event: Mask):
-        """Filter the DataFrame based on the provided masks."""
         event.stop()
-        if self.df.empty:
-            return
-
         mask = event.mask(self.df)
         if mask is None:
             self.masks.pop(event.identity, None)
         else:
             self.masks[event.identity] = mask
 
+        await self._update()
+
+    async def _update(self):
         if self.masks:
             df = self.df[reduce(lambda x, y: x & y, self.masks.values())]
         else:
@@ -80,18 +85,29 @@ class PandasInputFilter(Input):
         if self.styles.auto_dimensions:
             self.refresh(layout=True)
 
-        def mask(df: DataFrame) -> Union["Series[bool]", None]:  # TODO: allow mask to be created for specific columns
+        self.post_message(PandasContainer.Mask(id(self), self.mask))
+
+    @property
+    def mask(self) -> Callable[[DataFrame], Union["Series[bool]", None]]:
+        value = self.value
+
+        def _mask(df: DataFrame) -> Union["Series[bool]", None]:  # TODO: allow mask to be created for specific columns
             if not value:
                 return None
             index = df.index.astype(str).str.contains(value, case=False)
             row = df.astype(str).apply(lambda x: x.str.contains(value, case=False).any(), axis=1)
-            return index.__or__(row)
+            return row | index
 
-        self.post_message(PandasContainer.Mask(id(self), mask))
+        return _mask
 
 
 class PandasSelectFilter(SelectionList):
     def _message_changed(self) -> None:
         if not self._send_messages:
             return
-        self.post_message(PandasContainer.Mask(id(self), lambda df: df.astype(str).isin(self.selected).any(axis=1)))
+        self.post_message(PandasContainer.Mask(id(self), self.mask))
+
+    @property
+    def mask(self) -> Callable[[DataFrame], Union["Series[bool]", None]]:
+        selected = self.selected
+        return lambda df: df.astype(str).isin(selected).any(axis=1)
