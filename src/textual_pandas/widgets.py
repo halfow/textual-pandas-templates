@@ -78,6 +78,10 @@ class PandasContainer(Container):
 
 
 class PandasInputFilter(Input):
+    def __init__(self, *args, columns: list[str] | None = None, **kwargs):
+        self.columns = columns
+        super().__init__(*args, **kwargs)
+
     def _watch_value(self, value: str) -> None:
         self._suggestion = ""
         if self.suggester and value:
@@ -98,10 +102,16 @@ class PandasInputFilter(Input):
             row = df.astype(str).apply(lambda x: x.str.contains(value, case=False).any(), axis=1)
             return row | index
 
+        if self.columns:
+            return lambda df: _mask(df[self.columns])  # type: ignore
         return _mask
 
 
 class PandasSelectFilter(SelectionList):
+    def __init__(self, *args, columns: list[str] | None = None, **kwargs):
+        self.columns = columns
+        super().__init__(*args, **kwargs)
+
     def _message_changed(self) -> None:
         if not self._send_messages:
             return
@@ -109,5 +119,9 @@ class PandasSelectFilter(SelectionList):
 
     @property
     def mask(self) -> Callable[[DataFrame], Union["Series[bool]", None]]:
-        selected = self.selected
-        return lambda df: df.astype(str).isin(selected).any(axis=1)
+        def _mask(df: DataFrame) -> Union["Series[bool]", None]:
+            return df.astype(str).isin(self.selected).any(axis=1)
+
+        if self.columns:
+            return lambda df: _mask(df[self.columns])  # type: ignore
+        return _mask

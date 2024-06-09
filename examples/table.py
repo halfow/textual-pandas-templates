@@ -62,7 +62,8 @@ class ExampleFilter(ExampleApp):
         await self.table.add_filter(PandasInputFilter(placeholder="Filter"))
         await self.table.add_filter(PandasInputFilter(placeholder="Another filter"))
         for column in self.df.columns:
-            cf = PandasSelectFilter(*((c, c, True) for c in self.df[column].unique().astype(str)))
+            values = self.df[column].unique().astype(str)
+            cf = PandasSelectFilter(*((c, c, True) for c in values), columns=[column])
             cf.border_title = column
             await self.table.add_filter(cf)
 
@@ -84,7 +85,8 @@ class ExampleColumnSelect(ExampleApp):
 
     async def _add_column_filter(self, *columns: str):
         for column in columns:
-            cf = PandasSelectFilter(*((c, c, True) for c in self.df[column].unique().astype(str)))
+            values = self.df[column].unique().astype(str)
+            cf = PandasSelectFilter(*((c, c, True) for c in values), columns=[column])
             cf.border_title = column
             await self.table.add_filter(cf)
 
