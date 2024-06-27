@@ -1,6 +1,7 @@
 import re
 from collections.abc import Callable
-from functools import reduce
+from functools import cached_property, reduce
+from types import MappingProxyType
 
 import pandas as pd
 from natsort import natsort_keygen
@@ -76,41 +77,34 @@ class PandasContainer(Container):
         )
         await self.query_one(SortableDataTable).update(self.df[col][cell & index], self.index, self.height)
 
+    @cached_property
+    def _lookup(self):
+        lookup = {
+            self.CellFilter: self._cell,
+            self.IndexFilter: self._index,
+            self.ColumnFilter: self._column,
+        }
+        return MappingProxyType(lookup)
+
     async def update(self, df: DataFrame, index=None, height=1):
         self.df, self.index, self.height = df.astype(str), index, height
         self._cell = {}
         self._index = DataFrame(index=df.index)
         self._column = DataFrame(index=df.columns)
 
-        filters = (c for c in self.get_child_by_type(HorizontalScroll).children if hasattr(c, "apply_filter"))
-        for child in filters:
-            for message, identity, mask in child.apply_filter():  # type: ignore
-                match message:
-                    case PandasContainer.ColumnFilter:
-                        self._column[identity] = mask(self.df)
-                    case PandasContainer.IndexFilter:
-                        self._index[identity] = mask(self.df)
-                    case PandasContainer.CellFilter:
-                        self._cell[identity] = mask(self.df)
+        _children = (c for c in self.get_child_by_type(HorizontalScroll).children if hasattr(c, "apply_filter"))
+        _filters = (c.apply_filter() for c in _children)  # type: ignore
+        for message, identity, mask in _filters:
+            self._lookup[message][identity] = mask(self.df)
 
         await self._update()
 
     @on(CellFilter)
-    async def _row_filter(self, event: CellFilter):
-        event.stop()
-        self._cell[event.identity] = event.selection(self.df)
-        await self._update()
-
     @on(IndexFilter)
-    async def _index_filter(self, event: IndexFilter):
-        event.stop()
-        self._index[event.identity] = event.selection(self.df)
-        await self._update()
-
     @on(ColumnFilter)
-    async def _column_filter(self, event: ColumnFilter):
+    async def _filter(self, event: _Filter):
         event.stop()
-        self._column[event.identity] = event.selection(self.df)
+        self._lookup[type(event)][event.identity] = event.selection(self.df)  # type: ignore
         await self._update()
 
 
@@ -178,18 +172,14 @@ class PandasCellSelectFilter(SelectionList):
 
     def mask(self, df: DataFrame) -> "DataFrame[bool]":
         _mask = df.map(lambda _: pd.NA)
-        columns = self.columns or df.columns
-        if self.selected:
-            _mask[columns] = df[columns].isin(self.selected)
-        else:
-            _mask[columns] = False
+        _col = self.columns or df.columns
+        _mask[_col] = df[_col].isin(self.selected) if self.selected else False
         return _mask
 
     def apply_filter(self):
         yield PandasContainer.CellFilter, id(self), self.mask
 
     def _message_changed(self) -> None:
-        super()._message_changed()
         if self._send_messages:
             for filter, identity, func in self.apply_filter():
                 self.post_message(filter(identity, func))
