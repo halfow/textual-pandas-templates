@@ -1,30 +1,22 @@
 from pathlib import Path
 
+from natsort import natsorted
 from pandas import DataFrame, read_csv
-from textual import on
 from textual.app import App
-from textual.widgets import SelectionList
-from textual_pandas.widgets import DataTable, PandasContainer, PandasInputFilter, PandasSelectFilter, SortableDataTable
+from textual.containers import Container
+from textual_pandas.widgets import (
+    DataTable,
+    PandasCellSearch,
+    PandasCellSelectFilter,
+    PandasColumnSelectFilter,
+    PandasContainer,
+    PandasIndexInputFilter,
+    SortableDataTable,
+)
 
 
 class ExampleApp(App):
-    DEFAULT_CSS = """
-        PandasContainer > HorizontalScroll {
-            height: 5;
-        }
-        PandasContainer > HorizontalScroll > * {
-            width: 20;
-        }
-        #cs:focus,
-        PandasContainer > HorizontalScroll > *:focus {
-            border: round deepskyblue;
-        }
-        #cs,
-        SortableDataTable,
-        PandasContainer > HorizontalScroll > * {
-            border: round orange;
-        }
-    """
+    CSS_PATH = "table.tcss"
 
     def __init__(self, path: Path):
         self.path = path
@@ -59,11 +51,10 @@ class ExampleFilter(ExampleApp):
     async def on_mount(self):
         self.query_one(SortableDataTable).border_title = str(self.path)
         await self.table.update(self.df)
-        await self.table.add_filter(PandasInputFilter(placeholder="Filter"))
-        await self.table.add_filter(PandasInputFilter(placeholder="Another filter"))
+        await self.table.add_filter(PandasIndexInputFilter(placeholder="Filter"))
         for column in self.df.columns:
             values = self.df[column].unique().astype(str)
-            cf = PandasSelectFilter(*((c, c, True) for c in values), columns=[column])
+            cf = PandasCellSelectFilter(*((c, c, True) for c in values), columns=[column])
             cf.border_title = column
             await self.table.add_filter(cf)
 
@@ -71,37 +62,28 @@ class ExampleFilter(ExampleApp):
 class ExampleColumnSelect(ExampleApp):
     def compose(self):
         self.table = PandasContainer()
-        select = SelectionList(*((c, c, True) for c in self.df.columns), id="cs")
-        select.border_title = "Columns"
-        yield select
         yield self.table
 
     async def on_mount(self):
         self.query_one(SortableDataTable).border_title = str(self.path)
-        await self.table.update(self.df)
-        await self.table.add_filter(PandasInputFilter(placeholder="Filter"))
-        await self.table.add_filter(PandasInputFilter(placeholder="Another filter"))
-        await self._add_column_filter(*self.df.columns)
+        await self.table.update(self.df, index="Index")
 
-    async def _add_column_filter(self, *columns: str):
-        for column in columns:
-            values = self.df[column].unique().astype(str)
-            cf = PandasSelectFilter(*((c, c, True) for c in values), columns=[column])
+        select = PandasColumnSelectFilter(*((c, c, True) for c in self.df.columns), classes="filter")
+        select.border_title = "Columns"
+
+        index = PandasIndexInputFilter(placeholder="Filter", classes="filter")
+        index.border_title = "Index Filter"
+
+        cell = PandasCellSearch(placeholder="Non-index regex", classes="filter")
+        cell.border_title = "Cell Filter"
+
+        await self.table.add_filter(Container(index, select, classes="filter-box"), cell)
+
+        for column in self.df.columns:
+            values = natsorted(self.df[column].unique().astype(str))
+            cf = PandasCellSelectFilter(*((c, c, True) for c in values), columns=[column], classes="filter")
             cf.border_title = column
             await self.table.add_filter(cf)
-
-    @on(SelectionList.SelectedChanged)
-    async def _update_columns(self, event: SelectionList.SelectedChanged):
-        selected = event.selection_list.selected.copy()
-        spawn = selected.copy()
-        for fb in self.query(PandasSelectFilter):
-            if (t := fb.border_title) not in selected:
-                await fb.remove()
-            else:
-                spawn.remove(t)
-
-        await self._add_column_filter(*spawn)
-        await self.table.update(self.df[selected] if selected else self.df)
 
 
 if __name__ == "__main__":
@@ -114,7 +96,14 @@ if __name__ == "__main__":
         "column": ExampleColumnSelect,
     }
     parser = ArgumentParser()
-    parser.add_argument("widget", choices=widgets.keys())
-    parser.add_argument("-p", "--path", default=Path(__file__).with_name("data.csv"), type=Path)
+    parser.add_argument(
+        "widget",
+        choices=widgets.keys(),
+    )
+    parser.add_argument(
+        *("-p", "--path"),
+        default=Path(__file__).with_name("data.csv"),
+        type=Path,
+    )
     args = parser.parse_args()
     app = widgets[args.widget](args.path).run()

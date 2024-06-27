@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas>=2",
     "textual",
+    "natsort",
 ]
 
 [project.optional-dependencies]

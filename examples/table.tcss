@@ -1,0 +1,19 @@
+.filter-container {
+    height: 10;
+}
+.filter:focus {
+    border: round deepskyblue;
+}
+.filter,
+.filter-container,
+.table {
+    border: round orange;
+}
+.table {
+    height: 1fr;
+}
+.filter {
+    width: 1fr;
+    min-height: 3;
+    max-height: 5;
+}
