@@ -1,11 +1,11 @@
-.filter-container {
+.container {
     height: 10;
 }
 .filter:focus {
     border: round deepskyblue;
 }
 .filter,
-.filter-container,
+.container,
 .table {
     border: round orange;
 }
