@@ -1,5 +1,6 @@
 .container {
     height: 10;
+    width: 1fr;
 }
 .filter:focus {
     border: round deepskyblue;
@@ -11,9 +12,17 @@
 }
 .table {
     height: 1fr;
+    width: 2fr;
 }
 .filter {
     width: 1fr;
     min-height: 3;
     max-height: 5;
+}
+
+.selection-list--button,
+.selection-list--button-highlighted,
+.selection-list--button-selected,
+.selection-list--button-selected-highlighted {
+    background: #000000 0%;
 }

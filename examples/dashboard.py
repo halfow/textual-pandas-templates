@@ -25,7 +25,7 @@ class PandasSummary(Container):
         yield self.pretty
 
     async def update(self, df: DataFrame):
-        self.pretty.update("No data" if df.empty else df.describe())
+        self.pretty.update("No data" if df.empty else df.describe().T)
 
 
 class TableFilterApp(App):
