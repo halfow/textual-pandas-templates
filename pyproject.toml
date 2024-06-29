@@ -37,3 +37,4 @@ select = ["B", "C", "E", "F", "G", "I", "Q", "W", "UP", "PL","RUF", "FLY"]
 
 [tool.mypy]
 ignore_missing_imports = true
+check_untyped_defs = true

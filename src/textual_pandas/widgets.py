@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cached_property, reduce
 from types import MappingProxyType
 
@@ -37,27 +38,19 @@ class SortableDataTable(DataTable):
 
 
 class PandasContainer(Container):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Filters
-        self._cell: dict[int, "DataFrame[bool]"]  # type: ignore # noqa: UP037
-        self._index: "DataFrame[bool]"  # type: ignore # noqa: UP037
-        self._column: "DataFrame[bool]"  # type: ignore # noqa: UP037
-
+    @dataclass
     class _Filter(Message):
-        def __init__(self, identity: int, selection):
-            super().__init__()
-            self.identity = identity
-            self.selection = selection
+        identity: int
+        selection: Callable[[DataFrame], Series | DataFrame]
 
     class ColumnFilter(_Filter):
-        selection: Callable[[DataFrame], "Series[bool]"]
+        selection: Callable[[DataFrame], Series]
 
     class IndexFilter(_Filter):
-        selection: Callable[[DataFrame], "Series[bool]"]
+        selection: Callable[[DataFrame], Series]
 
     class CellFilter(_Filter):
-        selection: Callable[[DataFrame], "DataFrame[bool]"]
+        selection: Callable[[DataFrame], DataFrame]
 
     def compose(self):  # TODO: Support custom visualizations instead of just table
         yield HorizontalScroll(classes="filter-container")
@@ -67,15 +60,15 @@ class PandasContainer(Container):
         await self.get_child_by_type(HorizontalScroll).mount(*widget)
 
     async def _update(self):
-        _col = self._column.all(axis=1)
-        col = _col[_col].index.to_list()
-        index = self._index.all(axis=1)
+        index: Series["bool"] = self._index.all(axis=1)  # noqa: UP037
+        _columns: Series["bool"] = self._column.all(axis=1)  # noqa: UP037
+        columns: list[str] = _columns[_columns].index.to_list()
         cell = reduce(
-            lambda x, y: x & (y[col].any(axis=1) | y[col].isna().all(axis=1)),
+            lambda x, y: x & (y[columns].any(axis=1) | y[columns].isna().all(axis=1)),
             self._cell.values(),
             Series(True, index=self.df.index),
         )
-        await self.query_one(SortableDataTable).update(self.df[col][cell & index], self.index, self.height)
+        await self.query_one(SortableDataTable).update(self.df[columns][cell & index], self.index, self.height)
 
     @cached_property
     def _lookup(self):
@@ -88,13 +81,13 @@ class PandasContainer(Container):
 
     async def update(self, df: DataFrame, index=None, height=1):
         self.df, self.index, self.height = df.astype(str), index, height
-        self._cell = {}
+        self._cell: dict[int, DataFrame] = {}
         self._index = DataFrame(index=df.index)
         self._column = DataFrame(index=df.columns)
 
-        _children = (c for c in self.get_child_by_type(HorizontalScroll).children if hasattr(c, "apply_filter"))
-        _filters = (c.apply_filter() for c in _children)  # type: ignore
-        for message, identity, mask in _filters:
+        children = (c for c in self.get_child_by_type(HorizontalScroll).children if hasattr(c, "apply_filter"))
+        filters = (c.apply_filter() for c in children)  # type: ignore
+        for message, identity, mask in filters:
             self._lookup[message][identity] = mask(self.df)
 
         await self._update()
@@ -109,49 +102,48 @@ class PandasContainer(Container):
 
 
 class PandasIndexInputFilter(Input):
-    def mask(self, df: DataFrame) -> "Series[bool]":
-        if self.value:
-            return df.index.astype(str).str.contains(self.value, case=False)
-        return Series(True, index=df.index)
+    def mask(self, df: DataFrame) -> Series:
+        try:
+            re.compile(self.value, re.IGNORECASE)
+        except re.error:
+            return Series(False, index=df.index, dtype="boolean")
+        return df.index.astype(str).str.contains(self.value, case=False, regex=True)
 
     def apply_filter(self):
         yield PandasContainer.IndexFilter, id(self), self.mask
 
     def _watch_value(self, value: str) -> None:
-        for filter, identity, func in self.apply_filter():
-            self.post_message(filter(identity, func))
+        for message, identity, func in self.apply_filter():
+            self.post_message(message(identity, func))
 
 
 class PandasCellSearch(Input):
     def __init__(self, *args, columns=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.regex = re.compile(self.value, re.IGNORECASE)
         self.columns = columns
 
     def mask(self, df: DataFrame):
-        search = lambda x: bool(self.regex.search(str(x)))  # noqa: E731
-        _df = df.map(lambda _: pd.NA)
-        if self.value:
-            columns = self.columns or df.columns
-            _df[columns] = df[columns].map(search)
+        _df = DataFrame(index=df.index, columns=df.columns, dtype="boolean")
+        try:
+            re.compile(self.value, re.IGNORECASE)
+        except re.error:
+            return _df
+
+        columns = self.columns or df.columns
+        _df[columns] = df[columns].apply(lambda x: x.str.contains(self.value, case=False, regex=True))
         return _df
 
     def apply_filter(self):
         yield PandasContainer.CellFilter, id(self), self.mask
 
     def _watch_value(self, value: str) -> None:
-        try:
-            self.regex = re.compile(self.value, re.IGNORECASE)
-        except re.error:
-            return
-
-        for filter, identity, func in self.apply_filter():
-            self.post_message(filter(identity, func))
+        for message, identity, func in self.apply_filter():
+            self.post_message(message(identity, func))
 
 
 class PandasColumnSelectFilter(SelectionList):
-    def mask(self, df: DataFrame) -> "Series[bool]":
-        series = Series(False, index=df.columns)
+    def mask(self, df: DataFrame) -> Series:
+        series = Series(False, index=df.columns, dtype="boolean")
         if self.selected:
             series[self.selected] = True
         return series
@@ -161,8 +153,8 @@ class PandasColumnSelectFilter(SelectionList):
 
     def _message_changed(self) -> None:
         if self._send_messages:
-            for filter, identity, func in self.apply_filter():
-                self.post_message(filter(identity, func))
+            for message, identity, func in self.apply_filter():
+                self.post_message(message(identity, func))
 
 
 class PandasCellSelectFilter(SelectionList):
@@ -170,16 +162,16 @@ class PandasCellSelectFilter(SelectionList):
         super().__init__(*args, **kwargs)
         self.columns = columns
 
-    def mask(self, df: DataFrame) -> "DataFrame[bool]":
-        _mask = df.map(lambda _: pd.NA)
-        _col = self.columns or df.columns
-        _mask[_col] = df[_col].isin(self.selected) if self.selected else False
-        return _mask
+    def mask(self, df: DataFrame) -> DataFrame:
+        mask = DataFrame(index=df.index, columns=df.columns, dtype="boolean")
+        columns = self.columns or df.columns
+        mask[columns] = df[columns].isin(self.selected) if self.selected else False
+        return mask
 
     def apply_filter(self):
         yield PandasContainer.CellFilter, id(self), self.mask
 
     def _message_changed(self) -> None:
         if self._send_messages:
-            for filter, identity, func in self.apply_filter():
-                self.post_message(filter(identity, func))
+            for message, identity, func in self.apply_filter():
+                self.post_message(message(identity, func))
